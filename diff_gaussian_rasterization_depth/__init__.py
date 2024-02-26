@@ -86,14 +86,20 @@ class _RasterizeGaussians(torch.autograd.Function):
         if raster_settings.debug:
             cpu_args = cpu_deep_copy_tuple(args) # Copy them before they can be corrupted
             try:
-                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer,depth_map,weight_map = _C.rasterize_gaussians(*args)
+                num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map, means2D, depths, conic_opacities = _C.rasterize_gaussians(*args)
             except Exception as ex:
                 torch.save(cpu_args, "snapshot_fw.dump")
                 print("\nAn error occured in forward. Please forward snapshot_fw.dump for debugging.")
                 raise ex
         else:
-            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer,depth_map,weight_map = _C.rasterize_gaussians(*args)
+            num_rendered, color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map, means2D, depths, conic_opacities = _C.rasterize_gaussians(*args)
             #return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer);
+
+        # print("@@@@@@@@@@@@@@@")
+        # print(means2D.size())
+        # if means2D.size(0) > 0:
+        #     print(means2D.reshape(-1, 2))  # this is correct!!!
+        #     print(means2D)
 
         # Keep relevant tensors for backward
         ctx.raster_settings = raster_settings
@@ -101,10 +107,10 @@ class _RasterizeGaussians(torch.autograd.Function):
         # ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer, binningBuffer, imgBuffer)
         ctx.save_for_backward(colors_precomp, means3D, scales, rotations, cov3Ds_precomp, radii, sh, geomBuffer,
                               binningBuffer, imgBuffer,depth_map, weight_map)
-        return color, radii, depth_map, weight_map
+        return color, radii, depth_map, weight_map, means2D, depths, conic_opacities
 
     @staticmethod
-    def backward(ctx, grad_out_color, grad_radii, grad_out_depth, grad_weight):   #grad_out_color，LOSS对forward输出的导数。
+    def backward(ctx, grad_out_color, grad_radii, grad_out_depth, grad_weight, __, ___, ____):   #grad_out_color，LOSS对forward输出的导数。
 
         # Restore necessary values from context
         num_rendered = ctx.num_rendered

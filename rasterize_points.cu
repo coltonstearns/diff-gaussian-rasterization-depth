@@ -20,6 +20,7 @@
 #include <memory>
 #include "cuda_rasterizer/config.h"
 #include "cuda_rasterizer/rasterizer.h"
+#include "cuda_rasterizer/rasterizer_impl.h"
 #include <fstream>
 #include <string>
 #include <functional>
@@ -32,7 +33,7 @@ std::function<char*(size_t N)> resizeFunctional(torch::Tensor& t) {
     return lambda;
 }
 
-std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,torch::Tensor,torch::Tensor>
+std::tuple<int, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,torch::Tensor,torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
 RasterizeGaussiansCUDA(
 	const torch::Tensor& background,
 	const torch::Tensor& means3D,       //parameters
@@ -115,7 +116,58 @@ RasterizeGaussiansCUDA(
 		radii.contiguous().data<int>(),
 		debug);
   }
-  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer,depth_map,weight_map);
+
+  // My modifications: get geometry buffer background
+  char* geom_buffer = reinterpret_cast<char*>(geomBuffer.contiguous().data_ptr());
+  CudaRasterizer::GeometryState geomState = CudaRasterizer::GeometryState::fromChunk(geom_buffer, P);
+
+  // convert means2D to tensor
+  std::vector<float> means2D_values;
+  std::vector<float2> means2D_host(P);
+  if (P != 0) {
+    // Allocate memory on the host
+    cudaMemcpy(means2D_host.data(), geomState.means2D, P * sizeof(float2), cudaMemcpyDeviceToHost);
+
+    // Copy values to the vector
+    for (size_t i = 0; i < P; ++i) {
+        means2D_values.push_back(means2D_host[i].x);
+        means2D_values.push_back(means2D_host[i].y);
+        // std::cout << "Adding values: (" << means2D_host[i].x << ", " << means2D_host[i].y << ")" << std::endl;
+    }
+  }
+  torch::Tensor means2D_tensor = torch::tensor(means2D_values, torch::kFloat32);  // .reshape({P, 2});
+
+  // convert depth to tensor
+  std::vector<float> depth_values;
+  if (P != 0) {
+    // Use std::vector instead of manual memory allocation
+    std::vector<float> depths_host(P);
+    cudaMemcpy(depths_host.data(), geomState.depths, P * sizeof(float), cudaMemcpyDeviceToHost);
+
+    // Copy values to the vector
+    for (size_t i = 0; i < P; ++i) {
+        float val = depths_host[i];
+        depth_values.push_back(val);
+    }
+  }
+  torch::Tensor depth_tensor = torch::tensor(depth_values, torch::kFloat32);
+
+  // convert conic opacity to tensor
+  std::vector<float> conicops_values;
+  if (P != 0) {
+    std::vector<float4> conics_host(P);
+    cudaMemcpy(conics_host.data(), geomState.conic_opacity, P * sizeof(float4), cudaMemcpyDeviceToHost);
+    for (size_t i = 0; i < P; ++i) {
+        conicops_values.push_back(conics_host[i].x);
+        conicops_values.push_back(conics_host[i].y);
+        conicops_values.push_back(conics_host[i].z);
+        conicops_values.push_back(conics_host[i].w);
+    }
+  }
+  torch::Tensor conic_opacity_tensor = torch::tensor(conicops_values, torch::kFloat32);
+
+
+  return std::make_tuple(rendered, out_color, radii, geomBuffer, binningBuffer, imgBuffer, depth_map, weight_map, means2D_tensor, depth_tensor, conic_opacity_tensor);
 }
 
 std::tuple<torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor>
